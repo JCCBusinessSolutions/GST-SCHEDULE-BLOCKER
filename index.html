@@ -2760,11 +2760,12 @@ function gcalUrl(e, pageUrl) {
   p.set('action', 'TEMPLATE');
   p.set('text', e.title);
   p.set('dates', useLocalTime(e) ? localStamp(e.start, e.tz) + '/' + localStamp(e.end, e.tz) : compact(new Date(e.start)) + '/' + compact(new Date(e.end)));
-  if (rrule(e)) p.set('recur', 'RRULE:' + rrule(e));
   p.set('ctz', e.tz);
   if ((e.venue || '').trim()) p.set('location', e.venue.trim());
   p.set('details', [(e.desc || '').trim(), pageUrl ? 'Event page: ' + pageUrl : ''].filter(Boolean).join('\n\n'));
-  return 'https://calendar.google.com/calendar/render?' + p.toString();
+  var rr = rrule(e);
+  /* Google reads recur reliably when the RRULE punctuation is left literal (RRULE:FREQ=WEEKLY;BYDAY=FR), so it is appended unencoded. */
+  return 'https://calendar.google.com/calendar/render?' + p.toString() + (rr ? '&recur=' + encodeURIComponent('RRULE:' + rr).replace(/%3A/g, ':').replace(/%3B/g, ';').replace(/%3D/g, '=').replace(/%2C/g, ',') : '');
 }
 
 /* ---------- link payloads: event data travels inside the QR link ---------- */
