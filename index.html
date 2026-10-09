@@ -3071,7 +3071,7 @@ function openForm(id) {
     recFieldset(rec, f.sd) + '<fieldset class="rem"><legend>Event Reminders</legend>' +
     '<label><input type="checkbox" id="f-r1d"' + (f.r1d ? ' checked' : '') + '><span>Notify <b>1 day before</b> the event (24 hours before the start time).</span></label>' +
     '<label><input type="checkbox" id="f-r1h"' + (f.r1h ? ' checked' : '') + '><span>Notify <b>1 hour before</b> the event.</span></label>' +
-    '<div class="small muted" style="margin-top:6px">Reminders are counted back from the event start in its own time zone and are included in the downloadable calendar file. A plain Google Calendar link cannot set custom reminders.</div></fieldset></form>';
+    '<div class="small muted" style="margin-top:6px">Reminders are counted back from the event start in its own time zone and are shown to advisors on the event page. Google’s Add to Calendar link cannot set custom reminders, so each advisor’s own calendar default notification applies.</div></fieldset></form>';
   openModal(e ? 'Edit Event' : 'Add Event', body,
     '<button class="btn btn-outline" data-a="close">CANCEL</button><button class="btn btn-outline" data-a="save" data-v="save">SAVE EVENT</button><button class="btn btn-primary" data-a="save" data-v="qr">SAVE AND GENERATE QR</button>', true);
   updateRec();
@@ -3167,12 +3167,10 @@ function qrNow(id) {
 function isPublicRoute() { return /^#\/(e|list)\//.test(location.hash); }
 
 function calActions(e, pageUrl) {
-  var rc = !!recRule(e), id = esc(e.id);
-  var g = '<a class="btn ' + (rc ? 'btn-outline' : 'btn-primary') + ' btn-lg" target="_blank" rel="noopener noreferrer" href="' + esc(gcalUrl(e, pageUrl)) + '">ADD TO GOOGLE CALENDAR</a>';
-  var f = '<button class="btn ' + (rc ? 'btn-primary' : 'btn-outline') + ' btn-lg" ' + (rc ? '' : 'style="border-color:var(--gold)" ') + 'data-a="pics" data-id="' + id + '">DOWNLOAD CALENDAR FILE</button><div id="ics-err-' + id + '"></div>';
-  if (rc) return '<div class="stack"><div class="notice n-info" style="margin:0"><b>This event repeats.</b> For the repeat to save for sure, use <b>Download Calendar File</b> and open it (Google Calendar, Apple Calendar and Outlook all import it). Google’s quick-add link may drop the repeat — if the repeat box shows “Does not repeat”, set it there before pressing Save.</div>' + f +
-    '<div class="small muted center">Or try the quick link (opens Google Calendar; press <b>Save</b> there — nothing is added until you do):</div>' + g + '</div>';
-  return '<div class="stack">' + g + '<div class="small muted center" style="margin-top:-4px">Opens Google Calendar in a new tab. Review the details and press <b>Save</b> there — the event is not added until you do.</div>' + f + '</div>';
+  var rc = !!recRule(e);
+  return '<div class="stack"><a class="btn btn-primary btn-lg" target="_blank" rel="noopener noreferrer" href="' + esc(gcalUrl(e, pageUrl)) + '">ADD TO GOOGLE CALENDAR</a>' +
+    '<div class="small muted center" style="margin-top:-4px">Opens Google Calendar in a new tab. Review the details and press <b>Save</b> there — the event is not added until you do.</div>' +
+    (rc ? '<div class="notice n-info" style="margin:0"><b>This event repeats.</b> If Google shows <b>Does not repeat</b> (the phone app often does), tap it and choose <b>' + esc(recSummary(e).replace(/^Repeats /, '')) + '</b> before pressing Save.</div>' : '') + '</div>';
 }
 var pubEvents = [];
 function pubShell(inner) {
@@ -3184,7 +3182,7 @@ function unavailable(msg) {
 function reminderBlock(e) {
   var r = reminderList(e);
   return '<section class="remind"><h2>Event Reminders</h2>' + (r.length ? '<ul class="r">' + r.map(function (x) { return '<li><b style="color:var(--navy)">' + x.label + '</b><span class="muted">' + esc(x.at) + '</span></li>'; }).join('') + '</ul>' +
-    '<ul class="n"><li><b>Calendar file (.ics):</b> includes these reminders; some calendar apps handle imported alerts differently.</li><li><b>Google Calendar button:</b> Google’s link can’t set custom reminders, so your calendar’s default notification and color apply.</li><li>Actual notifications also depend on your device’s notification permissions.</li></ul>' : '<p class="muted" style="margin:8px 0 0">No reminders are set for this event.</p>') + '</section>';
+    '<ul class="n"><li><b>Google Calendar button:</b> Google’s link can’t set custom reminders, so your calendar’s default notification and color apply.</li><li>Actual notifications also depend on your device’s notification permissions.</li></ul>' : '<p class="muted" style="margin:8px 0 0">No reminders are set for this event.</p>') + '</section>';
 }
 function renderPublicEvent(e) {
   pubEvents = [e];
