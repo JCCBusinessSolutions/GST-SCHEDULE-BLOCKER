@@ -93,8 +93,8 @@ button,input,select,textarea{font:inherit;color:inherit}
 .x:hover{background:#f1f5f9}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .fld{margin-bottom:14px}
-fieldset.rem{border:1px solid rgba(201,162,39,.7);background:rgba(234,242,251,.6);border-radius:12px;padding:12px 14px;margin:0 0 14px}
-fieldset.rem legend{padding:0 8px;font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--navy)}
+fieldset.rem,fieldset.rec{border:1px solid rgba(201,162,39,.7);background:rgba(234,242,251,.6);border-radius:12px;padding:12px 14px;margin:0 0 14px}
+fieldset.rem legend,fieldset.rec legend{padding:0 8px;font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--navy)}
 fieldset.rem label{display:flex;gap:10px;align-items:flex-start;padding:4px 0;cursor:pointer}
 fieldset.rem input{margin-top:3px;width:16px;height:16px;accent-color:var(--navy)}
 .qrbox{width:100%;max-width:280px;aspect-ratio:1;margin:14px auto 0;border:4px solid var(--gold);border-radius:12px;background:#fff;padding:4px;display:flex;align-items:center;justify-content:center}
@@ -107,6 +107,13 @@ fieldset.rem input{margin-top:3px;width:16px;height:16px;accent-color:var(--navy
 .toast.info{border-color:var(--navy);background:var(--light);color:var(--navy)}
 .sel-row{display:flex;gap:12px;align-items:flex-start;padding:12px 0;border-bottom:1px solid #eef2f7}
 .sel-row input{margin-top:4px;width:16px;height:16px;accent-color:var(--navy)}
+
+.pills{display:flex;gap:6px;flex-wrap:wrap}
+.pill{position:relative;display:inline-block}
+.pill input{position:absolute;opacity:0;inset:0;width:100%;height:100%;margin:0;cursor:pointer}
+.pill span{display:inline-flex;width:38px;height:38px;align-items:center;justify-content:center;border-radius:50%;border:1px solid #cbd5e1;background:#fff;font-weight:700;font-size:13px;color:var(--navy)}
+.pill input:checked+span{background:var(--navy);color:#fff;border-color:var(--navy)}
+.pill input:focus-visible+span{outline:3px solid var(--gold);outline-offset:2px}
 
 /* public */
 .pub{min-height:100vh;display:flex;flex-direction:column}
@@ -2567,17 +2574,147 @@ function tzShort(iso, tz) {
   return p ? p.value : tz;
 }
 function dateLine(e) {
-  var a = fmtDate(e.start, e.tz), b = fmtDate(e.end, e.tz);
+  var o = displayOcc(e), a = fmtDate(o.s, e.tz), b = fmtDate(o.e, e.tz);
   return a === b ? a : a + ' – ' + b;
 }
-function isPast(e) { return new Date(e.end).getTime() < Date.now(); }
+function timeRange(e) { var o = displayOcc(e); return fmtTime(o.s, e.tz) + ' – ' + fmtTime(o.e, e.tz); }
+function isPast(e) { return !nextOccurrence(e, Date.now()); } // for a repeating event: the whole series has ended
 function compact(d) { return d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, ''); }
 function reminderList(e) {
-  var out = [], s = new Date(e.start).getTime();
+  var out = [], s = new Date(displayOcc(e).s).getTime();
   if (e.r1d) { var a = new Date(s - 864e5).toISOString(); out.push({ label: '1 day before', at: fmtDate(a, e.tz) + ', ' + fmtTime(a, e.tz) }); }
   if (e.r1h) { var b = new Date(s - 36e5).toISOString(); out.push({ label: '1 hour before', at: fmtDate(b, e.tz) + ', ' + fmtTime(b, e.tz) }); }
   return out;
 }
+
+
+/* ---------- recurrence (daily / weekly / monthly / quarterly / yearly) ---------- */
+var DOW_CODES = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'], DOW_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+var FREQ_LABEL = { daily: ['day', 'days'], weekly: ['week', 'weeks'], monthly: ['month', 'months'], quarterly: ['quarter', 'quarters'], yearly: ['year', 'years'] };
+function pad2(n) { return String(n).padStart(2, '0'); }
+function ymdParts(ymd) { var p = ymd.split('-').map(Number); return { y: p[0], m: p[1], d: p[2] }; }
+function addDays(ymd, n) { var p = ymdParts(ymd); return new Date(Date.UTC(p.y, p.m - 1, p.d + n)).toISOString().slice(0, 10); }
+function dowOf(ymd) { var p = ymdParts(ymd); return new Date(Date.UTC(p.y, p.m - 1, p.d)).getUTCDay(); }
+function daysInMonth(y, m) { return new Date(Date.UTC(y, m, 0)).getUTCDate(); }
+function monFirst(a, b) { return ((a + 6) % 7) - ((b + 6) % 7); }
+
+function cleanRec(r) {
+  if (!r || typeof r !== 'object' || !FREQ_LABEL[r.f]) return null;
+  var n = parseInt(r.n, 10); if (!(n >= 1 && n <= 99)) n = 1;
+  var w = Array.isArray(r.w) ? r.w.filter(function (d) { return d >= 0 && d <= 6 && d % 1 === 0; }) : [];
+  var u = typeof r.u === 'string' && validDate(r.u) ? r.u : '';
+  var c = parseInt(r.c, 10); if (!(c >= 1 && c <= 999)) c = 0;
+  return { f: r.f, n: n, w: w, u: u, c: c };
+}
+function recRule(e) { return e && e.rec && FREQ_LABEL[e.rec.f] ? e.rec : null; }
+
+/* Walks the occurrence dates (local calendar dates in the event's own zone) in order.
+   cb(ymd, index) returns true to stop. Follows RFC 5545: months without the start day are skipped. */
+function eachOccurrenceDate(e, cb) {
+  var r = recRule(e), startYmd = toParts(e.start, e.tz).date;
+  if (!r) { cb(startYmd, 0); return; }
+  var n = Math.max(1, r.n || 1), max = r.c > 0 ? r.c : Infinity, idx = 0, guard = 0, sp = ymdParts(startYmd);
+  var emit = function (ymd) {
+    if (r.u && ymd > r.u) return 'end';
+    if (ymd < startYmd) return 'skip';
+    if (idx >= max) return 'end';
+    var stop = cb(ymd, idx); idx++;
+    return stop ? 'end' : 'ok';
+  };
+  if (r.f === 'daily') {
+    for (var k = 0; guard++ < 40000; k++) { if (emit(addDays(startYmd, k * n)) === 'end') return; }
+  } else if (r.f === 'weekly') {
+    var days = (r.w && r.w.length ? r.w : [dowOf(startYmd)]).slice().sort(monFirst);
+    var weekStart = addDays(startYmd, -((dowOf(startYmd) + 6) % 7)); // weeks start on Monday (RRULE default)
+    for (var w = 0; guard++ < 40000; w++) {
+      var base = addDays(weekStart, w * 7 * n);
+      for (var i = 0; i < days.length; i++) { if (emit(addDays(base, (days[i] + 6) % 7)) === 'end') return; }
+    }
+  } else {
+    var step = r.f === 'monthly' ? n : r.f === 'quarterly' ? 3 * n : 12 * n;
+    for (var j = 0; guard++ < 40000; j++) {
+      var mm = sp.m - 1 + j * step, yy = sp.y + Math.floor(mm / 12); mm = ((mm % 12) + 12) % 12;
+      if (yy > sp.y + 300) return;
+      if (sp.d > daysInMonth(yy, mm + 1)) continue; // skipped month
+      if (emit(yy + '-' + pad2(mm + 1) + '-' + pad2(sp.d)) === 'end') return;
+    }
+  }
+}
+function occAt(e, ymd) {
+  var t = toParts(e.start, e.tz).time, s = zonedToUtc(ymd, t, e.tz), dur = new Date(e.end) - new Date(e.start);
+  return { s: s.toISOString(), e: new Date(s.getTime() + dur).toISOString() };
+}
+function cutYmd(e, fromMs) { // dates before this can't still be running at fromMs, so we skip the costly conversion
+  var dur = new Date(e.end) - new Date(e.start);
+  return toParts(new Date(fromMs - dur - 2 * 864e5).toISOString(), e.tz).date;
+}
+/* First occurrence still running or upcoming at fromMs (or null if the event/series is over). */
+function nextOccurrence(e, fromMs) {
+  if (!recRule(e)) return new Date(e.end).getTime() >= fromMs ? { s: e.start, e: e.end, i: 0 } : null;
+  var cut = cutYmd(e, fromMs), found = null;
+  eachOccurrenceDate(e, function (ymd, i) {
+    if (ymd < cut) return false;
+    var o = occAt(e, ymd);
+    if (new Date(o.e).getTime() >= fromMs) { o.i = i; found = o; return true; }
+    return false;
+  });
+  return found;
+}
+function nextOccurrences(e, count) {
+  var out = [], now = Date.now();
+  if (!recRule(e)) return out;
+  var cut = cutYmd(e, now);
+  eachOccurrenceDate(e, function (ymd) {
+    if (ymd < cut) return false;
+    var o = occAt(e, ymd);
+    if (new Date(o.e).getTime() >= now) out.push(o);
+    return out.length >= count;
+  });
+  return out;
+}
+function firstOccurrences(e, count) {
+  var out = [];
+  eachOccurrenceDate(e, function (ymd) { out.push(occAt(e, ymd)); return out.length >= count; });
+  return out;
+}
+function displayOcc(e) { return nextOccurrence(e, Date.now()) || { s: e.start, e: e.end }; }
+function occStartMs(e) { return new Date(displayOcc(e).s).getTime(); }
+
+function recSummary(e) {
+  var r = recRule(e); if (!r) return '';
+  var n = Math.max(1, r.n || 1), lab = FREQ_LABEL[r.f], sp = toParts(e.start, e.tz), p = ymdParts(sp.date);
+  var every = n === 1 ? ({ daily: 'daily', weekly: 'weekly', monthly: 'monthly', quarterly: 'quarterly', yearly: 'yearly' })[r.f] : 'every ' + n + ' ' + lab[1];
+  var t = 'Repeats ' + every;
+  if (r.f === 'weekly') t += ' on ' + (r.w && r.w.length ? r.w : [dowOf(sp.date)]).slice().sort(monFirst).map(function (d) { return DOW_NAMES[d]; }).join(', ');
+  else if (r.f === 'monthly' || r.f === 'quarterly') t += ' on day ' + p.d + (p.d > 28 ? ' (months without that day are skipped)' : '');
+  else if (r.f === 'yearly') t += ' on ' + new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'long', day: 'numeric' }).format(new Date(Date.UTC(p.y, p.m - 1, p.d))) + (p.m === 2 && p.d === 29 ? ' (leap years only)' : '');
+  if (r.c > 0) t += ', ' + r.c + (r.c === 1 ? ' time' : ' times');
+  else if (r.u) t += ', until ' + fmtDate(zonedToUtc(r.u, '12:00', e.tz).toISOString(), e.tz);
+  return t;
+}
+function rrule(e) {
+  var r = recRule(e); if (!r) return null;
+  var f = { daily: 'DAILY', weekly: 'WEEKLY', monthly: 'MONTHLY', quarterly: 'MONTHLY', yearly: 'YEARLY' }[r.f];
+  var n = Math.max(1, r.n || 1) * (r.f === 'quarterly' ? 3 : 1), parts = ['FREQ=' + f];
+  if (n > 1) parts.push('INTERVAL=' + n);
+  if (r.f === 'weekly') parts.push('BYDAY=' + (r.w && r.w.length ? r.w : [dowOf(toParts(e.start, e.tz).date)]).slice().sort(monFirst).map(function (d) { return DOW_CODES[d]; }).join(','));
+  if (r.c > 0) parts.push('COUNT=' + r.c);
+  else if (r.u) parts.push('UNTIL=' + compact(zonedToUtc(r.u, '23:59', e.tz)));
+  return parts.join(';');
+}
+/* What goes into a calendar: for a repeating event, the series starting from its NEXT date
+   (so advisors don't get years of past meetings). COUNT is reduced to what is left. */
+function calEvent(e) {
+  var r = recRule(e); if (!r) return e;
+  var o = nextOccurrence(e, Date.now());
+  if (!o || o.s === e.start) return e;
+  var r2 = Object.assign({}, r); if (r.c > 0) r2.c = r.c - o.i;
+  return Object.assign({}, e, { start: o.s, end: o.e, rec: r2 });
+}
+function fixedOffset(tz, iso) { var y = new Date(iso).getUTCFullYear(); return tzOffset(Date.UTC(y, 0, 15), tz) === tzOffset(Date.UTC(y, 6, 15), tz); }
+function localStamp(iso, tz) { var p = toParts(iso, tz); return p.date.replace(/-/g, '') + 'T' + p.time.replace(':', '') + '00'; }
+/* Repeating events in zones with daylight saving must be sent as local time so 8:30 stays 8:30 after the clocks change. */
+function useLocalTime(e) { return !!recRule(e) && !fixedOffset(e.tz, e.start); }
 
 /* ---------- ICS (RFC 5545) ---------- */
 function icsEsc(v) { return String(v).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r\n|\r|\n/g, '\\n'); }
@@ -2593,10 +2730,15 @@ function fold(line) {
   return out.join('\r\n');
 }
 function buildIcs(e, pageUrl) {
+  e = calEvent(e);
+  var rr = rrule(e), local = useLocalTime(e);
   var desc = [(e.desc || '').trim(), pageUrl ? 'Event page: ' + pageUrl : ''].filter(Boolean).join('\n\n');
   var L = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//GST//GST EVENTS BLOCKER//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', 'BEGIN:VEVENT',
-    'UID:' + e.id + '@gst-events-blocker', 'DTSTAMP:' + compact(new Date()), 'DTSTART:' + compact(new Date(e.start)), 'DTEND:' + compact(new Date(e.end)),
-    'SUMMARY:' + icsEsc(e.title)];
+    'UID:' + e.id + '@gst-events-blocker', 'DTSTAMP:' + compact(new Date()),
+    local ? 'DTSTART;TZID=' + e.tz + ':' + localStamp(e.start, e.tz) : 'DTSTART:' + compact(new Date(e.start)),
+    local ? 'DTEND;TZID=' + e.tz + ':' + localStamp(e.end, e.tz) : 'DTEND:' + compact(new Date(e.end))];
+  if (rr) L.push('RRULE:' + rr);
+  L.push('SUMMARY:' + icsEsc(e.title));
   if (desc) L.push('DESCRIPTION:' + icsEsc(desc));
   if ((e.venue || '').trim()) L.push('LOCATION:' + icsEsc(e.venue.trim()));
   if (e.r1d) L.push('BEGIN:VALARM', 'TRIGGER:-P1D', 'ACTION:DISPLAY', 'DESCRIPTION:GST event reminder: 1 day before', 'END:VALARM');
@@ -2613,10 +2755,12 @@ function downloadIcs(e, pageUrl) {
 
 /* ---------- Google Calendar template link ---------- */
 function gcalUrl(e, pageUrl) {
+  e = calEvent(e);
   var p = new URLSearchParams();
   p.set('action', 'TEMPLATE');
   p.set('text', e.title);
-  p.set('dates', compact(new Date(e.start)) + '/' + compact(new Date(e.end)));
+  p.set('dates', useLocalTime(e) ? localStamp(e.start, e.tz) + '/' + localStamp(e.end, e.tz) : compact(new Date(e.start)) + '/' + compact(new Date(e.end)));
+  if (rrule(e)) p.set('recur', 'RRULE:' + rrule(e));
   p.set('ctz', e.tz);
   if ((e.venue || '').trim()) p.set('location', e.venue.trim());
   p.set('details', [(e.desc || '').trim(), pageUrl ? 'Event page: ' + pageUrl : ''].filter(Boolean).join('\n\n'));
@@ -2641,11 +2785,11 @@ function decodePayload(s) {
   var rawP = s[0] === '1' ? pipe(bytes, new DecompressionStream('deflate-raw')) : Promise.resolve(bytes);
   return rawP.then(function (raw) { return JSON.parse(new TextDecoder().decode(raw)); });
 }
-function toWire(e) { return { i: e.id, t: e.title, d: e.desc || '', s: e.start, e: e.end, z: e.tz, v: e.venue || '', a: e.r1d ? 1 : 0, b: e.r1h ? 1 : 0 }; }
+function toWire(e) { var w = { i: e.id, t: e.title, d: e.desc || '', s: e.start, e: e.end, z: e.tz, v: e.venue || '', a: e.r1d ? 1 : 0, b: e.r1h ? 1 : 0 }; var r = cleanRec(e.rec); if (r) w.r = r; return w; }
 function fromWire(w) {
   if (!w || typeof w.t !== 'string' || typeof w.s !== 'string' || typeof w.e !== 'string' || typeof w.z !== 'string') return null;
   if (!validTz(w.z) || isNaN(new Date(w.s)) || isNaN(new Date(w.e)) || !(new Date(w.e) > new Date(w.s))) return null;
-  return { id: String(w.i || ''), title: w.t.slice(0, 200), desc: String(w.d || '').slice(0, 5000), start: new Date(w.s).toISOString(), end: new Date(w.e).toISOString(), tz: w.z, venue: String(w.v || '').slice(0, 300), r1d: !!w.a, r1h: !!w.b };
+  return { id: String(w.i || ''), title: w.t.slice(0, 200), desc: String(w.d || '').slice(0, 5000), start: new Date(w.s).toISOString(), end: new Date(w.e).toISOString(), tz: w.z, venue: String(w.v || '').slice(0, 300), r1d: !!w.a, r1h: !!w.b, rec: cleanRec(w.r) };
 }
 function baseUrl() {
   var p = (settings.publicUrl || '').trim();
@@ -2659,7 +2803,7 @@ function eventLink(e) {
   return encodePayload(toWire(e)).then(function (p) { return b + '#/e/' + p; });
 }
 function upcomingPublished() {
-  return events.filter(function (e) { return e.status === 'published' && !isPast(e); }).sort(function (a, b) { return new Date(a.start) - new Date(b.start); });
+  return events.filter(function (e) { return e.status === 'published' && !isPast(e); }).sort(function (a, b) { return occStartMs(a) - occStartMs(b); });
 }
 function listLink() {
   var b = baseUrl(); if (!b) return Promise.reject(new Error(NO_BASE));
@@ -2704,7 +2848,7 @@ function printSheets(items) {
   setTimeout(function () { window.print(); }, 350);
 }
 function printItem(e, img) {
-  return { heading: e.title, lines: [dateLine(e), fmtTime(e.start, e.tz) + ' – ' + fmtTime(e.end, e.tz)].concat((e.venue || '').trim() ? [e.venue.trim()] : []), img: img };
+  return { heading: e.title, lines: (recRule(e) ? [recSummary(e), timeRange(e)] : [dateLine(e), timeRange(e)]).concat((e.venue || '').trim() ? [e.venue.trim()] : []), img: img };
 }
 
 /* ---------- logo ---------- */
@@ -2740,7 +2884,7 @@ function pageHead(title, sub) {
 function vDashboard() {
   var now = Date.now();
   var total = events.length;
-  var upcoming = events.filter(function (e) { return e.status !== 'archived' && new Date(e.end) >= now; }).length;
+  var upcoming = events.filter(function (e) { return e.status !== 'archived' && !isPast(e); }).length;
   var published = events.filter(function (e) { return e.status === 'published'; }).length;
   var past = events.filter(isPast).length;
   var cards = [['Total Events', total], ['Upcoming Events', upcoming], ['Published Events', published], ['Past Events', past]]
@@ -2758,7 +2902,7 @@ function filteredEvents() {
     if (ui.time === 'upcoming' && isPast(e)) return false;
     if (ui.time === 'past' && !isPast(e)) return false;
     return true;
-  }).sort(function (a, b) { var d = new Date(a.start) - new Date(b.start); return ui.sort === 'asc' ? d : -d; });
+  }).sort(function (a, b) { var d = occStartMs(a) - occStartMs(b); return ui.sort === 'asc' ? d : -d; });
 }
 
 function opt(v, label, cur) { return '<option value="' + v + '"' + (v === cur ? ' selected' : '') + '>' + label + '</option>'; }
@@ -2792,13 +2936,13 @@ function rowHtml(e) {
         : '<button class="btn btn-outline btn-sm" data-a="status" data-v="draft" data-id="' + e.id + '">Restore</button>') +
     (e.status !== 'archived' ? '<button class="btn btn-outline btn-sm" data-a="status" data-v="archived" data-id="' + e.id + '">Archive</button>' : '') +
     '<button class="btn btn-del btn-sm" data-a="del" data-id="' + e.id + '">Delete</button>';
-  return '<div class="row"><div class="c-title"><div class="ttl">' + esc(e.title) + '</div><div class="small muted">' + esc(e.venue || '') + '</div></div>' +
-    '<div>' + esc(dateLine(e)) + '</div><div class="muted">' + fmtTime(e.start, e.tz) + ' – ' + fmtTime(e.end, e.tz) + '</div>' +
+  return '<div class="row"><div class="c-title"><div class="ttl">' + esc(e.title) + '</div><div class="small muted">' + esc(e.venue || '') + '</div>' + (recRule(e) ? '<div class="small" style="color:var(--navy);font-weight:600">↻ ' + esc(recSummary(e)) + '</div>' : '') + '</div>' +
+    '<div>' + esc(dateLine(e)) + '</div><div class="muted">' + timeRange(e) + '</div>' +
     '<div><span class="badge b-' + e.status + '">' + e.status + '</span></div><div class="acts">' + acts + '</div></div>';
 }
 
 function vQr() {
-  var list = events.filter(function (e) { return e.status === 'published' && (ui.showPast || !isPast(e)); }).sort(function (a, b) { return new Date(a.start) - new Date(b.start); });
+  var list = events.filter(function (e) { return e.status === 'published' && (ui.showPast || !isPast(e)); }).sort(function (a, b) { return occStartMs(a) - occStartMs(b); });
   var n = list.filter(function (e) { return ui.selected[e.id]; }).length;
   var all = list.length && list.every(function (e) { return ui.selected[e.id]; });
   var h = pageHead('QR Code Generator', 'Each published event has its own QR code. Select events to print several at once.') +
@@ -2808,7 +2952,7 @@ function vQr() {
   h += '<label class="sel-row" style="font-weight:700;color:var(--navy)"><input type="checkbox" data-a="selall"' + (all ? ' checked' : '') + '> Select all</label>';
   h += list.map(function (e) {
     return '<div class="sel-row"><input type="checkbox" data-a="sel" data-id="' + e.id + '"' + (ui.selected[e.id] ? ' checked' : '') + '><div style="flex:1"><div class="ttl" style="font-weight:700;color:var(--navy)">' + esc(e.title) + '</div>' +
-      '<div class="muted">' + esc(dateLine(e)) + ' · ' + fmtTime(e.start, e.tz) + ' – ' + fmtTime(e.end, e.tz) + '</div></div><button class="btn btn-gold btn-sm" data-a="qr" data-id="' + e.id + '">GENERATE QR</button></div>';
+      '<div class="muted">' + esc(dateLine(e)) + ' · ' + timeRange(e) + '</div></div><button class="btn btn-gold btn-sm" data-a="qr" data-id="' + e.id + '">GENERATE QR</button></div>';
   }).join('');
   return h + '</section>';
 }
@@ -2864,10 +3008,56 @@ function openModal(title, body, footer, wide) {
 function byId(id) { return events.filter(function (e) { return e.id === id; })[0]; }
 
 var saving = false;
+
+function recFieldset(rec, sd) {
+  var endType = rec.c > 0 ? 'count' : rec.u ? 'until' : 'never';
+  var wsel = rec.w && rec.w.length ? rec.w : [dowOf(sd)];
+  var letters = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+  var pills = [0, 1, 2, 3, 4, 5, 6].map(function (d) {
+    return '<label class="pill" title="' + DOW_NAMES[d] + '"><input type="checkbox" class="rw" data-d="' + d + '"' + (wsel.indexOf(d) >= 0 ? ' checked' : '') + ' aria-label="' + DOW_NAMES[d] + '"><span>' + letters[d] + '</span></label>';
+  }).join('');
+  return '<fieldset class="rec"><legend>Repeat</legend>' +
+    '<div class="fld"><label class="l" for="f-rf">Repeats</label><select class="input" id="f-rf">' + opt('none', 'Does not repeat', rec.f) + opt('daily', 'Daily', rec.f) + opt('weekly', 'Weekly', rec.f) + opt('monthly', 'Monthly', rec.f) + opt('quarterly', 'Quarterly', rec.f) + opt('yearly', 'Yearly', rec.f) + '</select></div>' +
+    '<div id="rec-more" class="hidden">' +
+    '<div class="grid2"><div class="fld"><label class="l" for="f-rn">Every</label><div style="display:flex;gap:8px;align-items:center"><input class="input" type="number" id="f-rn" min="1" max="99" value="' + (rec.n || 1) + '" style="max-width:90px"><span id="rec-unit" class="muted"></span></div><div class="ferr" id="e-f-rn"></div></div>' +
+    '<div class="fld"><label class="l" for="f-re">Ends</label><select class="input" id="f-re">' + opt('never', 'Never', endType) + opt('until', 'On a date', endType) + opt('count', 'After a number of events', endType) + '</select></div></div>' +
+    '<div id="rec-weekdays" class="fld hidden"><label class="l">Repeat on</label><div class="pills">' + pills + '</div><div class="ferr" id="e-f-rw"></div></div>' +
+    '<div id="rec-until" class="fld hidden"><label class="l" for="f-ru">Last date</label><input class="input" type="date" id="f-ru" value="' + esc(rec.u || '') + '"><div class="ferr" id="e-f-ru"></div></div>' +
+    '<div id="rec-count" class="fld hidden"><label class="l" for="f-rc">Number of events</label><input class="input" type="number" id="f-rc" min="1" max="999" value="' + (rec.c > 0 ? rec.c : 10) + '" style="max-width:120px"><div class="ferr" id="e-f-rc"></div></div>' +
+    '<div class="notice n-info" id="rec-sum" style="margin-top:0"></div>' +
+    '</div></fieldset>';
+}
+function readRec() {
+  var fr = $('f-rf').value; if (fr === 'none') return null;
+  var end = $('f-re').value;
+  var w = Array.prototype.slice.call(document.querySelectorAll('#modal .rw')).filter(function (c) { return c.checked; }).map(function (c) { return +c.getAttribute('data-d'); });
+  return { f: fr, n: parseInt($('f-rn').value, 10) || 1, w: w, u: end === 'until' ? $('f-ru').value : '', c: end === 'count' ? (parseInt($('f-rc').value, 10) || 0) : 0 };
+}
+function updateRec() {
+  var sel = $('f-rf'); if (!sel) return;
+  var on = sel.value !== 'none';
+  $('rec-more').classList.toggle('hidden', !on);
+  if (!on) return;
+  var fr = sel.value, end = $('f-re').value, nn = parseInt($('f-rn').value, 10);
+  $('rec-unit').textContent = FREQ_LABEL[fr][nn === 1 ? 0 : 1];
+  $('rec-weekdays').classList.toggle('hidden', fr !== 'weekly');
+  $('rec-until').classList.toggle('hidden', end !== 'until');
+  $('rec-count').classList.toggle('hidden', end !== 'count');
+  var box = $('rec-sum'), sd = $('f-sd').value, st = $('f-st').value, ed = $('f-ed').value, et = $('f-et').value, tz = $('f-tz').value;
+  if (!(validDate(sd) && validTime(st) && validDate(ed) && validTime(et) && validTz(tz))) { box.textContent = 'Fill in the start and end above to preview the schedule.'; return; }
+  var s = zonedToUtc(sd, st, tz), en = zonedToUtc(ed, et, tz);
+  var rec = cleanRec(readRec());
+  if (!(en > s) || !rec) { box.textContent = 'Set a valid start and end to preview the schedule.'; return; }
+  var tmp = { start: s.toISOString(), end: en.toISOString(), tz: tz, rec: rec };
+  var dates = firstOccurrences(tmp, 4).map(function (o) { return fmtDate(o.s, tz); });
+  box.innerHTML = '<b>' + esc(recSummary(tmp)) + '.</b><br>First dates: ' + esc(dates.join(' · ')) + (dates.length >= 4 ? ' …' : '');
+}
+
 function openForm(id) {
   var e = id ? byId(id) : null, f;
   if (e) { var s = toParts(e.start, e.tz), en = toParts(e.end, e.tz); f = { title: e.title, desc: e.desc, sd: s.date, st: s.time, ed: en.date, et: en.time, venue: e.venue, tz: e.tz, status: e.status, r1d: e.r1d, r1h: e.r1h }; }
   else { var today = toParts(new Date().toISOString(), settings.tz).date; f = { title: '', desc: '', sd: today, st: '08:30', ed: today, et: '17:00', venue: '', tz: settings.tz, status: 'published', r1d: true, r1h: true }; }
+  var rec = (e && recRule(e)) || { f: 'none', n: 1, w: [], u: '', c: 0 };
   var fld = function (idn, label, inner, errKey) { return '<div class="fld"><label class="l" for="' + idn + '">' + label + '</label>' + inner + '<div class="ferr" id="e-' + (errKey || idn) + '"></div></div>'; };
   var body = '<form id="ev-form" novalidate data-id="' + esc(id || '') + '"><div id="f-err"></div>' +
     fld('f-title', 'Event Name *', '<input class="input" id="f-title" maxlength="200" placeholder="e.g. GST Quarterly Summit" value="' + esc(f.title) + '">') +
@@ -2877,12 +3067,13 @@ function openForm(id) {
     fld('f-venue', 'Venue', '<input class="input" id="f-venue" maxlength="300" placeholder="Venue or meeting link" value="' + esc(f.venue) + '">') +
     '<div class="grid2">' + fld('f-tz', 'Time Zone', '<select class="input" id="f-tz">' + Array.from(new Set([f.tz].concat(TZS))).map(function (z) { return opt(z, z, f.tz); }).join('') + '</select>') +
     fld('f-status', 'Publication Status', '<select class="input" id="f-status">' + opt('draft', 'Draft', f.status) + opt('published', 'Published', f.status) + opt('archived', 'Archived', f.status) + '</select>') + '</div>' +
-    '<fieldset class="rem"><legend>Event Reminders</legend>' +
+    recFieldset(rec, f.sd) + '<fieldset class="rem"><legend>Event Reminders</legend>' +
     '<label><input type="checkbox" id="f-r1d"' + (f.r1d ? ' checked' : '') + '><span>Notify <b>1 day before</b> the event (24 hours before the start time).</span></label>' +
     '<label><input type="checkbox" id="f-r1h"' + (f.r1h ? ' checked' : '') + '><span>Notify <b>1 hour before</b> the event.</span></label>' +
     '<div class="small muted" style="margin-top:6px">Reminders are counted back from the event start in its own time zone and are included in the downloadable calendar file. A plain Google Calendar link cannot set custom reminders.</div></fieldset></form>';
   openModal(e ? 'Edit Event' : 'Add Event', body,
     '<button class="btn btn-outline" data-a="close">CANCEL</button><button class="btn btn-outline" data-a="save" data-v="save">SAVE EVENT</button><button class="btn btn-primary" data-a="save" data-v="qr">SAVE AND GENERATE QR</button>', true);
+  updateRec();
   if (!e) { var first = $('f-title'); if (first) first.focus(); } // immediate (never delayed), so it can't steal focus later
 }
 
@@ -2904,11 +3095,26 @@ function saveForm(mode) {
   if (!v.ed) fail('f-ed', 'End date is required.'); else if (!validDate(v.ed)) fail('f-ed', 'Enter a valid date.');
   if (!v.et) fail('f-et', 'End time is required.'); else if (!validTime(v.et)) fail('f-et', 'Enter a valid time.');
   if (!validTz(v.tz)) fail('f-tz', 'Choose a valid time zone.');
+  var recur = null;
+  if ($('f-rf').value !== 'none') {
+    var rd = readRec(), rnum = parseInt($('f-rn').value, 10), endType = $('f-re').value;
+    if (!(rnum >= 1 && rnum <= 99)) fail('f-rn', 'Enter a number from 1 to 99.');
+    if (rd.f === 'weekly') {
+      if (!rd.w.length) fail('f-rw', 'Choose at least one weekday.');
+      else if (validDate(v.sd) && rd.w.indexOf(dowOf(v.sd)) < 0) fail('f-rw', 'The first event is on a ' + DOW_NAMES[dowOf(v.sd)] + ', so ' + DOW_NAMES[dowOf(v.sd)] + ' must be selected (or change the start date).');
+    }
+    if (endType === 'until') {
+      var ru = $('f-ru').value;
+      if (!validDate(ru)) fail('f-ru', 'Pick a valid last date.'); else if (validDate(v.sd) && ru < v.sd) fail('f-ru', 'The last date must be on or after the start date.');
+    }
+    if (endType === 'count') { var cn = parseInt($('f-rc').value, 10); if (!(cn >= 1 && cn <= 999)) fail('f-rc', 'Enter a number from 1 to 999.'); }
+    recur = cleanRec(rd);
+  }
   if (bad) return;
   var s = zonedToUtc(v.sd, v.st, v.tz), en = zonedToUtc(v.ed, v.et, v.tz);
   if (!(en > s)) { setErr('f-ed', 'End must be later than the start.'); setErr('f-et', 'End must be later than the start.'); return; }
   var id = $('ev-form').getAttribute('data-id');
-  var rec = { id: id || uid(), title: v.title, desc: v.desc, start: s.toISOString(), end: en.toISOString(), tz: v.tz, venue: v.venue, status: v.status, r1d: v.r1d, r1h: v.r1h, created: Date.now() };
+  var rec = { id: id || uid(), title: v.title, desc: v.desc, start: s.toISOString(), end: en.toISOString(), tz: v.tz, venue: v.venue, status: v.status, r1d: v.r1d, r1h: v.r1h, rec: recur, created: Date.now() };
   var prev = events.slice();
   if (id) { events = events.map(function (x) { return x.id === id ? Object.assign({}, x, rec, { created: x.created }) : x; }); } else events.push(rec);
   saving = true;
@@ -2978,11 +3184,11 @@ function reminderBlock(e) {
 }
 function renderPublicEvent(e) {
   pubEvents = [e];
-  var sd = fmtDate(e.start, e.tz), ed = fmtDate(e.end, e.tz), multi = sd !== ed, z = tzShort(e.start, e.tz);
+  var oc = displayOcc(e), rc = !!recRule(e), sd = fmtDate(oc.s, e.tz), ed = fmtDate(oc.e, e.tz), multi = sd !== ed, z = tzShort(oc.s, e.tz);
   var dd = function (k, v) { return '<div><dt class="l">' + k + '</dt><dd>' + esc(v) + '</dd></div>'; };
   $('app').innerHTML = pubShell('<article class="card pcard"><div class="tag">Event Details</div><div class="gold-rule"></div><div class="body"><h1>' + esc(e.title) + '</h1><div class="bar"></div>' +
     (isPast(e) ? '<div class="notice n-warn" style="margin:0 0 14px">This event has already ended.</div>' : '') +
-    '<dl class="dl">' + dd(multi ? 'Starts' : 'Date', sd) + (multi ? dd('Ends', ed) : '') + dd('Start Time', fmtTime(e.start, e.tz) + ' ' + z) + dd('End Time', fmtTime(e.end, e.tz) + ' ' + z) + (e.venue ? '<div style="grid-column:1/-1">' + dd('Venue', e.venue) + '</div>' : '') + '</dl>' +
+    '<dl class="dl">' + dd(rc ? 'Next date' : multi ? 'Starts' : 'Date', sd) + (multi ? dd('Ends', ed) : '') + dd('Start Time', fmtTime(oc.s, e.tz) + ' ' + z) + dd('End Time', fmtTime(oc.e, e.tz) + ' ' + z) + (rc ? '<div style="grid-column:1/-1">' + dd('Repeats', recSummary(e).replace(/^Repeats /, '')) + '</div>' : '') + (e.venue ? '<div style="grid-column:1/-1">' + dd('Venue', e.venue) + '</div>' : '') + '</dl>' + (rc && !isPast(e) ? '<div class="notice n-info" style="margin:0 0 14px">This event repeats. The calendar buttons below add the whole series, starting from the next date.</div>' : '') +
     (e.desc ? '<div><div class="l">Description</div><p style="white-space:pre-wrap;margin:0">' + esc(e.desc) + '</p></div>' : '') +
     reminderBlock(e) + calActions(e, '') + '</div></article>');
   document.title = e.title + ' — ' + settings.appName;
@@ -2992,7 +3198,7 @@ function renderPublicList(list) {
   var items = list.filter(function (e) { return !isPast(e); });
   $('app').innerHTML = pubShell('<div class="page-h" style="margin-bottom:18px"><h1>Upcoming GST Events</h1><div class="bar"></div><p class="muted" style="margin:6px 0 0">Pick the events you want and add each one to your calendar. Nothing is added automatically.</p></div>' +
     (items.length ? items.map(function (e) {
-      return '<article class="card pcard"><div class="gold-rule"></div><div class="body"><h2 style="font-size:24px">' + esc(e.title) + '</h2><p style="margin:6px 0 0;font-weight:700">' + esc(dateLine(e)) + '</p><p class="muted" style="margin:0">' + fmtTime(e.start, e.tz) + ' – ' + fmtTime(e.end, e.tz) + '</p>' + (e.venue ? '<p class="muted" style="margin:0 0 14px">' + esc(e.venue) + '</p>' : '<div style="height:14px"></div>') +
+      return '<article class="card pcard"><div class="gold-rule"></div><div class="body"><h2 style="font-size:24px">' + esc(e.title) + '</h2><p style="margin:6px 0 0;font-weight:700">' + esc(dateLine(e)) + '</p><p class="muted" style="margin:0">' + timeRange(e) + '</p>' + (recRule(e) ? '<p class="muted" style="margin:0">↻ ' + esc(recSummary(e)) + '</p>' : '') + (e.venue ? '<p class="muted" style="margin:0 0 14px">' + esc(e.venue) + '</p>' : '<div style="height:14px"></div>') +
         calActions(e, '') + '</div></article>';
     }).join('') : '<div class="empty"><b>No upcoming events yet</b>New GST events will appear here once published. Please check back soon.</div>'));
 }
@@ -3029,7 +3235,7 @@ document.addEventListener('click', function (ev) {
     case 'view': {
       var e = byId(id); if (!e) break;
       var row = function (k, val) { return '<div style="display:grid;grid-template-columns:1fr 2fr;gap:8px;margin-bottom:10px"><div class="l" style="margin:0">' + k + '</div><div style="word-break:break-word;white-space:pre-wrap">' + esc(val) + '</div></div>'; };
-      openModal('Event Details', row('Event', e.title) + row('Date', dateLine(e)) + row('Time', fmtTime(e.start, e.tz) + ' – ' + fmtTime(e.end, e.tz) + ' (' + e.tz + ')') + row('Venue', e.venue || '—') + row('Status', e.status) +
+      openModal('Event Details', row('Event', e.title) + row(recRule(e) ? 'Next date' : 'Date', dateLine(e)) + (recRule(e) ? row('Repeat', recSummary(e)) + row('First date', fmtDate(e.start, e.tz)) + row('Next dates', nextOccurrences(e, 5).map(function (o) { return fmtDate(o.s, e.tz); }).join('\n') || 'None — the series has ended') : '') + row('Time', timeRange(e) + ' (' + e.tz + ')') + row('Venue', e.venue || '—') + row('Status', e.status) +
         row('Reminders', reminderList(e).map(function (r) { return r.label; }).join(', ') || 'None') + row('Description', e.desc || '—'), '<button class="btn btn-primary" data-a="close">CLOSE</button>', true);
       break;
     }
@@ -3085,10 +3291,18 @@ document.addEventListener('change', function (ev) {
     list.forEach(function (e) { ui.selected[e.id] = t.checked; }); renderAdmin(); return;
   }
   if (a === 'showpast') { ui.showPast = t.checked; renderAdmin(); return; }
+  if ((t.id && /^f-(rf|rn|re|ru|rc|st|ed|et|tz)$/.test(t.id)) || (t.classList && t.classList.contains('rw'))) { updateRec(); return; }
   if (t.id === 'flt-status') { ui.status = t.value; ui.page = 1; renderAdmin(); }
   else if (t.id === 'flt-time') { ui.time = t.value; ui.page = 1; renderAdmin(); }
   else if (t.id === 'flt-sort') { ui.sort = t.value; renderAdmin(); }
-  else if (t.id === 'f-sd') { var ed = $('f-ed'), prevS = t.getAttribute('data-prev'); if (ed && (!ed.value || ed.value < t.value || ed.value === prevS)) ed.value = t.value; t.setAttribute('data-prev', t.value); }
+  else if (t.id === 'f-sd') {
+    var ed = $('f-ed'), prevS = t.getAttribute('data-prev'); if (ed && (!ed.value || ed.value < t.value || ed.value === prevS)) ed.value = t.value;
+    if (validDate(prevS) && validDate(t.value)) { // keep the weekly day in step with the start date unless the user picked their own days
+      var boxes = Array.prototype.slice.call(document.querySelectorAll('#modal .rw')), chosen = boxes.filter(function (c) { return c.checked; });
+      if (chosen.length === 1 && +chosen[0].getAttribute('data-d') === dowOf(prevS)) boxes.forEach(function (c) { c.checked = +c.getAttribute('data-d') === dowOf(t.value); });
+    }
+    t.setAttribute('data-prev', t.value); updateRec();
+  }
   else if (t.id === 'import-file') {
     var file = t.files && t.files[0]; if (!file) return;
     var rd = new FileReader();
@@ -3096,7 +3310,7 @@ document.addEventListener('change', function (ev) {
       try {
         var d = JSON.parse(rd.result);
         if (!d || d.app !== 'gst-events-blocker' || !Array.isArray(d.events)) throw new Error('This is not a GST EVENTS BLOCKER backup file.');
-        var clean = d.events.filter(function (e) { return e && e.id && e.title && !isNaN(new Date(e.start)) && !isNaN(new Date(e.end)) && validTz(e.tz); });
+        var clean = d.events.filter(function (e) { return e && e.id && e.title && !isNaN(new Date(e.start)) && !isNaN(new Date(e.end)) && validTz(e.tz); }).map(function (e) { e.rec = cleanRec(e.rec); return e; });
         if (!confirm('Replace the ' + events.length + ' event(s) in this browser with ' + clean.length + ' event(s) from the backup?')) return;
         events = clean; if (d.settings && typeof d.settings === 'object') settings = Object.assign({}, DEFAULTS, d.settings);
         if (persist()) { toast('Backup imported.', 'success'); renderAdmin(); }
@@ -3109,6 +3323,7 @@ document.addEventListener('change', function (ev) {
 
 var searchTimer;
 document.addEventListener('input', function (ev) {
+  if (ev.target.id === 'f-rn' || ev.target.id === 'f-rc') updateRec();
   if (ev.target.id === 'flt-q') {
     ui.q = ev.target.value; ui.page = 1; clearTimeout(searchTimer);
     searchTimer = setTimeout(function () { var pos = ui.q.length; renderAdmin(); var el = $('flt-q'); if (el && document.activeElement === document.body) { el.focus(); el.setSelectionRange(pos, pos); } }, 200);
